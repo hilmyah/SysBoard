@@ -503,7 +503,7 @@ function dashApp(){
     mcLog:'',mcCmd:'',mcEnabled:false,
     plugins:[],pluginCat:'',installingIds:[],
 
-    init(){
+    startDash(){
       this.checkMcEnabled();
       this.fetchMetrics();
       this.fetchServices();
@@ -671,7 +671,7 @@ window.addEventListener('DOMContentLoaded',()=>{
         loginEl.style.display='none';
         // Trigger Alpine reactive state for x-show
         const dash=dashEl._x_dataStack?.[0];
-        if(dash){dash.visible=true;dash.init()}
+        if(dash){dash.visible=true;dash.startDash()}
         else dashEl.style.display='flex';
       }else{
         sessionStorage.removeItem('sb_tok');
