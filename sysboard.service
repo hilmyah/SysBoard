@@ -1,0 +1,20 @@
+[Unit]
+Description=SysBoard - System Dashboard v2
+After=network.target
+Documentation=https://github.com/hilmyah/sysboard
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sysboard
+ExecStart=/opt/sysboard/sysboard
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+# Hardening (optional, comment out if causing issues)
+# NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

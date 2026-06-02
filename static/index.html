@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SysBoard</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+[x-cloak]{display:none!important}
+:root{
+  --bg:#080b0f;
+  --bg2:#0d1117;
+  --surface:#111820;
+  --surface2:#151d27;
+  --border:#1c2535;
+  --border2:#243040;
+  --text:#b8c8d8;
+  --text2:#6a8099;
+  --text3:#3a5068;
+  --accent:#00e5b0;
+  --accent2:#0af;
+  --accent3:#f59e0b;
+  --danger:#f04a58;
+  --success:#22d47a;
+  --warn:#f59e0b;
+  --purple:#a78bfa;
+  --mono:'IBM Plex Mono',monospace;
+  --sans:'IBM Plex Sans',sans-serif;
+  --r:4px;
+}
+html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12px;min-height:100vh;line-height:1.5}
+
+/* ── Login ── */
+#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse 600px 400px at 30% 50%,rgba(0,229,176,0.04),transparent),radial-gradient(ellipse 600px 400px at 80% 20%,rgba(0,170,255,0.04),transparent)}
+.lbox{width:360px;background:var(--surface);border:1px solid var(--border2);position:relative;overflow:hidden}
+.lbox-top{height:2px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.lbox-inner{padding:36px 32px}
+.lbrand{font-family:var(--sans);font-size:24px;font-weight:600;color:#fff;letter-spacing:-0.5px}
+.lsub{color:var(--text3);font-size:10px;letter-spacing:2px;text-transform:uppercase;margin-top:2px;margin-bottom:32px}
+.lfield label{display:block;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:6px}
+.lfield input{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 12px;outline:none;border-radius:var(--r)}
+.lfield input:focus{border-color:var(--accent)}
+.lbtn{margin-top:20px;width:100%;background:var(--accent);color:#000;border:none;font-family:var(--sans);font-weight:600;font-size:12px;letter-spacing:1px;text-transform:uppercase;padding:12px;cursor:pointer;border-radius:var(--r)}
+.lbtn:hover{opacity:.9}
+.lerr{color:var(--danger);font-size:11px;margin-top:10px;text-align:center}
+
+/* ── Layout ── */
+#dashboard{display:flex;flex-direction:column;min-height:100vh}
+.hdr{border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:stretch;background:rgba(8,11,15,.96);backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.hdr-brand{font-family:var(--sans);font-weight:600;font-size:14px;color:#fff;display:flex;align-items:center;gap:8px;padding:14px 0}
+.hdr-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.hdr-stat{font-size:10px;color:var(--text3);padding:0 4px}
+.hdr-stat span{color:var(--accent);font-weight:500}
+.hdr-time{font-size:13px;color:var(--accent);letter-spacing:1px}
+.hdr-btn{background:none;border:1px solid var(--border2);color:var(--text3);font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;cursor:pointer;border-radius:var(--r)}
+.hdr-btn:hover{color:var(--text);border-color:var(--text3)}
+
+/* ── Nav ── */
+.nav{border-bottom:1px solid var(--border);display:flex;padding:0 24px;background:var(--bg2)}
+.nav-btn{background:none;border:none;border-bottom:2px solid transparent;color:var(--text2);font-family:var(--mono);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;padding:13px 18px;cursor:pointer;transition:color .15s,border-color .15s}
+.nav-btn:hover{color:var(--text)}
+.nav-btn.on{color:var(--accent);border-bottom-color:var(--accent)}
+.nav-badge{display:inline-flex;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--border2);color:var(--text3);font-size:9px;min-width:18px;height:16px;border-radius:8px;padding:0 4px;margin-left:6px;vertical-align:middle}
+
+/* ── Content ── */
+.content{padding:24px;flex:1}
+.panel{display:none}.panel.on{display:block}
+
+/* ── Metric cards ── */
+.cards-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:20px}
+.card{background:var(--surface);border:1px solid var(--border);padding:16px 18px;position:relative;overflow:hidden}
+.card-label{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin-bottom:8px}
+.card-value{font-family:var(--sans);font-size:28px;font-weight:600;color:#fff;line-height:1}
+.card-value.sm{font-size:20px}
+.card-sub{font-size:10px;color:var(--text3);margin-top:4px}
+.bar{height:2px;background:var(--border2);margin-top:10px;overflow:hidden;border-radius:1px}
+.bar-fill{height:100%;border-radius:1px;transition:width .6s ease}
+.card-accent{position:absolute;top:0;right:0;width:60px;height:60px;opacity:.04;font-size:48px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+
+/* ── Disk ── */
+.disks-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:20px}
+.disk-card{background:var(--surface2);border:1px solid var(--border);padding:14px 16px}
+.disk-mount{font-size:11px;font-weight:500;color:var(--accent2);margin-bottom:4px}
+
+/* ── Section header ── */
+.sec{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:12px;display:flex;align-items:center;gap:10px}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+.sec-right{font-size:9px;font-weight:400;letter-spacing:0;color:var(--text3);margin-left:auto}
+
+/* ── Services ── */
+.svc-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.svc-search{flex:1;min-width:200px;background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:8px 12px;outline:none;border-radius:var(--r)}
+.svc-search:focus{border-color:var(--accent)}
+.sort-btn{background:var(--surface);border:1px solid var(--border);color:var(--text3);font-size:10px;padding:6px 12px;cursor:pointer;border-radius:var(--r);white-space:nowrap;display:flex;align-items:center;gap:4px}
+.sort-btn:hover,.sort-btn.on{color:var(--accent);border-color:var(--accent)}
+.sort-btn .arr{font-size:9px;opacity:.7}
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:6px}
+.svc-row{background:var(--surface);border:1px solid var(--border);padding:12px 14px;display:flex;align-items:center;gap:10px;transition:border-color .15s}
+.svc-row:hover{border-color:var(--border2)}
+.svc-info{flex:1;min-width:0}
+.svc-name{font-size:11px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.svc-desc{font-size:9px;color:var(--text3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.svc-meta{font-size:9px;color:var(--text3);margin-top:3px;display:flex;gap:8px}
+.svc-meta span{color:var(--text2)}
+.pill{font-size:9px;padding:2px 7px;border-radius:10px;font-weight:500;white-space:nowrap}
+.pill-active{background:rgba(34,212,122,.1);color:var(--success);border:1px solid rgba(34,212,122,.2)}
+.pill-inactive{background:rgba(74,85,104,.1);color:var(--text3);border:1px solid var(--border)}
+.pill-failed{background:rgba(240,74,88,.1);color:var(--danger);border:1px solid rgba(240,74,88,.2)}
+.pill-other{background:rgba(245,158,11,.1);color:var(--warn);border:1px solid rgba(245,158,11,.2)}
+.btns{display:flex;gap:3px;flex-shrink:0}
+.btn{border:1px solid var(--border);background:none;color:var(--text3);font-family:var(--mono);font-size:9px;padding:4px 8px;cursor:pointer;border-radius:var(--r)}
+.btn:hover{color:var(--text);border-color:var(--text3)}
+.btn-g{border-color:rgba(34,212,122,.3);color:var(--success)}
+.btn-g:hover{background:rgba(34,212,122,.1)}
+.btn-r{border-color:rgba(240,74,88,.3);color:var(--danger)}
+.btn-r:hover{background:rgba(240,74,88,.1)}
+.btn-p{border-color:rgba(0,170,255,.3);color:var(--accent2)}
+.btn-p:hover{background:rgba(0,170,255,.1)}
+.btn-accent{background:var(--accent);color:#000;border:none;font-weight:600}
+.btn-accent:hover{opacity:.9}
+
+/* ── Log panel ── */
+.log-wrap{background:var(--bg);border:1px solid var(--border);border-radius:var(--r)}
+.log-bar{padding:8px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.log-bar-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3)}
+.log-panel{padding:14px;font-size:10px;height:300px;overflow-y:auto;color:#7a9db5;white-space:pre-wrap;line-height:1.6}
+.log-panel::-webkit-scrollbar{width:4px}
+.log-panel::-webkit-scrollbar-thumb{background:var(--border2)}
+.cmd-row{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.cmd-in{flex:1;background:transparent;border:none;color:var(--accent);font-family:var(--mono);font-size:11px;outline:none}
+.cmd-in::placeholder{color:var(--text3)}
+
+/* ── Containers ── */
+.engines-row{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.engine-badge{display:flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);padding:6px 12px;border-radius:var(--r);font-size:10px}
+.engine-dot{width:6px;height:6px;border-radius:50%}
+.engine-dot.on{background:var(--success)}
+.engine-dot.off{background:var(--text3)}
+.ctable{width:100%;border-collapse:collapse}
+.ctable th{text-align:left;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);padding:8px 12px;border-bottom:1px solid var(--border)}
+.ctable td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:11px}
+.ctable tr:hover td{background:var(--surface2)}
+.engine-tag{font-size:9px;padding:2px 6px;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text3)}
+
+/* ── Plugins ── */
+.plugin-cats{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.cat-btn{background:var(--surface);border:1px solid var(--border);color:var(--text3);font-size:10px;padding:5px 12px;cursor:pointer;border-radius:var(--r)}
+.cat-btn.on{color:var(--accent);border-color:var(--accent);background:rgba(0,229,176,.05)}
+.plugins-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
+.plugin-card{background:var(--surface);border:1px solid var(--border);padding:16px;position:relative}
+.plugin-card.installed{border-color:rgba(34,212,122,.25)}
+.plugin-name{font-family:var(--sans);font-size:13px;font-weight:600;color:#fff;margin-bottom:3px}
+.plugin-desc{font-size:10px;color:var(--text3);margin-bottom:12px;line-height:1.5}
+.plugin-footer{display:flex;align-items:center;justify-content:space-between}
+.plugin-cat{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)}
+.plugin-status{font-size:9px;padding:2px 8px;border-radius:10px}
+.plugin-installing{font-size:10px;color:var(--accent3)}
+
+/* ── Toast ── */
+.toasts{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:6px}
+.toast{background:var(--surface2);border:1px solid var(--border2);border-left:3px solid var(--accent);padding:10px 16px;font-size:11px;border-radius:var(--r);max-width:320px;animation:fadeIn .2s}
+.toast.err{border-left-color:var(--danger)}
+.toast.warn{border-left-color:var(--warn)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Net card ── */
+.net-row{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:6px}
+.net-item{font-size:9px;color:var(--text3)}
+.net-item span{color:var(--text);font-size:10px}
+
+/* ── Responsive ── */
+@media(max-width:700px){
+  .cards-row{grid-template-columns:repeat(2,1fr)}
+  .svc-grid{grid-template-columns:1fr}
+  .plugins-grid{grid-template-columns:1fr}
+  .content{padding:14px}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══════════════════════════════════════════════════════════════════ -->
+<div id="login-screen" x-data="loginApp()" x-cloak>
+  <div class="lbox">
+    <div class="lbox-top"></div>
+    <div class="lbox-inner">
+      <div class="lbrand">SysBoard</div>
+      <div class="lsub">System Dashboard</div>
+      <div class="lfield">
+        <label>Access Token</label>
+        <input type="password" placeholder="Enter token..." x-model="token" @keydown.enter="doLogin()">
+      </div>
+      <button class="lbtn" @click="doLogin()">Authenticate</button>
+      <div class="lerr" x-show="error" x-text="error"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ DASHBOARD ══════════════════════════════════════════════════════════════ -->
+<div id="dashboard" x-data="dashApp()" x-show="visible" x-cloak>
+
+  <!-- Header -->
+  <div class="hdr">
+    <div class="hdr-brand"><div class="hdr-dot"></div>SysBoard</div>
+    <div class="hdr-right">
+      <div class="hdr-stat">CPU <span x-text="metrics.cpu_percent ? metrics.cpu_percent.toFixed(1)+'%' : '--'"></span></div>
+      <div class="hdr-stat">RAM <span x-text="metrics.ram_percent ? metrics.ram_percent.toFixed(1)+'%' : '--'"></span></div>
+      <div class="hdr-stat" x-show="metrics.cpu_temp > 0">Temp <span x-text="metrics.cpu_temp ? metrics.cpu_temp.toFixed(1)+'°C' : '--'"></span></div>
+      <div class="hdr-time" x-text="clock"></div>
+      <button class="hdr-btn" @click="logout()">Logout</button>
+    </div>
+  </div>
+
+  <!-- Nav -->
+  <div class="nav">
+    <button class="nav-btn" :class="{on:tab==='overview'}" @click="tab='overview'">Overview</button>
+    <button class="nav-btn" :class="{on:tab==='services'}" @click="tab='services';fetchServices()">
+      Services <span class="nav-badge" x-text="services.length"></span>
+    </button>
+    <button class="nav-btn" :class="{on:tab==='minecraft'}" @click="tab='minecraft';fetchMcLog()" x-show="mcEnabled">Minecraft</button>
+    <button class="nav-btn" :class="{on:tab==='containers'}" @click="tab='containers';fetchContainers()">
+      Containers <span class="nav-badge" x-text="containers.length"></span>
+    </button>
+    <button class="nav-btn" :class="{on:tab==='plugins'}" @click="tab='plugins';fetchPlugins()">Plugins</button>
+  </div>
+
+  <div class="content">
+
+    <!-- ═══ OVERVIEW ════════════════════════════════════════════════════════ -->
+    <div class="panel" :class="{on:tab==='overview'}">
+
+      <div class="cards-row">
+        <!-- CPU -->
+        <div class="card">
+          <div class="card-label">CPU Usage</div>
+          <div class="card-value" x-text="metrics.cpu_percent ? metrics.cpu_percent.toFixed(1)+'%' : '--'"></div>
+          <div class="card-sub" x-text="'Load: ' + (metrics.load_avg || '--')"></div>
+          <div class="bar"><div class="bar-fill" :style="barStyle(metrics.cpu_percent)"></div></div>
+        </div>
+        <!-- RAM -->
+        <div class="card">
+          <div class="card-label">Memory</div>
+          <div class="card-value" x-text="metrics.ram_percent ? metrics.ram_percent.toFixed(1)+'%' : '--'"></div>
+          <div class="card-sub" x-text="metrics.ram_used ? fmtBytes(metrics.ram_used)+' / '+fmtBytes(metrics.ram_total) : '--'"></div>
+          <div class="bar"><div class="bar-fill" :style="barStyle(metrics.ram_percent)"></div></div>
+        </div>
+        <!-- Temp -->
+        <div class="card">
+          <div class="card-label">CPU Temp</div>
+          <div class="card-value sm" x-text="metrics.cpu_temp > 0 ? metrics.cpu_temp.toFixed(1)+'°C' : 'N/A'"></div>
+          <div class="card-sub" x-text="metrics.cpu_temp > 70 ? '⚠ High' : metrics.cpu_temp > 0 ? 'Normal' : 'No sensor'"></div>
+        </div>
+        <!-- Uptime -->
+        <div class="card">
+          <div class="card-label">Uptime</div>
+          <div class="card-value sm" x-text="metrics.uptime || '--'"></div>
+          <div class="card-sub" x-text="'Updated: ' + (metrics.timestamp || '--')"></div>
+        </div>
+        <!-- Network RX -->
+        <div class="card">
+          <div class="card-label">Network ↓ RX</div>
+          <div class="card-value sm" x-text="metrics.net_rx_rate != null ? fmtRate(metrics.net_rx_rate) : '--'"></div>
+          <div class="net-row">
+            <div class="net-item">Total <span x-text="fmtBytes(metrics.net_rx_bytes)"></span></div>
+          </div>
+        </div>
+        <!-- Network TX -->
+        <div class="card">
+          <div class="card-label">Network ↑ TX</div>
+          <div class="card-value sm" x-text="metrics.net_tx_rate != null ? fmtRate(metrics.net_tx_rate) : '--'"></div>
+          <div class="net-row">
+            <div class="net-item">Total <span x-text="fmtBytes(metrics.net_tx_bytes)"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec">Disk Usage</div>
+      <div class="disks-row">
+        <template x-for="d in (metrics.disks||[])" :key="d.mount">
+          <div class="disk-card">
+            <div class="disk-mount" x-text="d.mount"></div>
+            <div class="card-sub" x-text="fmtBytes(d.used)+' / '+fmtBytes(d.total)"></div>
+            <div class="bar" style="margin-top:8px"><div class="bar-fill" :style="barStyle(d.percent)"></div></div>
+            <div class="card-sub" style="margin-top:4px" x-text="d.percent ? d.percent.toFixed(1)+'% used' : ''"></div>
+          </div>
+        </template>
+      </div>
+
+    </div>
+
+    <!-- ═══ SERVICES ════════════════════════════════════════════════════════ -->
+    <div class="panel" :class="{on:tab==='services'}">
+
+      <div class="svc-toolbar">
+        <input class="svc-search" type="text" placeholder="Search service name or description..." x-model="svcFilter">
+
+        <button class="sort-btn" :class="{on:svcSort==='name'}" @click="setSvcSort('name')">
+          A–Z <span class="arr" x-text="svcSort==='name'?(svcAsc?'↑':'↓'):''"></span>
+        </button>
+        <button class="sort-btn" :class="{on:svcSort==='mem'}" @click="setSvcSort('mem')">
+          RAM <span class="arr" x-text="svcSort==='mem'?(svcAsc?'↑':'↓'):''"></span>
+        </button>
+        <button class="sort-btn" :class="{on:svcSort==='uptime'}" @click="setSvcSort('uptime')">
+          Uptime <span class="arr" x-text="svcSort==='uptime'?(svcAsc?'↑':'↓'):''"></span>
+        </button>
+        <button class="sort-btn" :class="{on:svcSort==='status'}" @click="setSvcSort('status')">
+          Status <span class="arr" x-text="svcSort==='status'?(svcAsc?'↑':'↓'):''"></span>
+        </button>
+
+        <span style="margin-left:auto;font-size:9px;color:var(--text3)" x-text="filteredSvcs.length + ' services'"></span>
+      </div>
+
+      <div class="svc-grid">
+        <template x-for="s in filteredSvcs" :key="s.name">
+          <div class="svc-row">
+            <div class="svc-info">
+              <div class="svc-name" x-text="s.name"></div>
+              <div class="svc-desc" x-text="s.desc"></div>
+              <div class="svc-meta">
+                <span x-show="s.mem_bytes > 0">RAM: <span x-text="fmtBytes(s.mem_bytes)"></span></span>
+                <span x-show="s.uptime_str">Up: <span x-text="s.uptime_str"></span></span>
+              </div>
+            </div>
+            <span class="pill" :class="pillClass(s.active)" x-text="s.sub || s.active"></span>
+            <div class="btns">
+              <button class="btn btn-g" @click="svcAction(s.name,'start')">start</button>
+              <button class="btn btn-r" @click="svcAction(s.name,'stop')">stop</button>
+              <button class="btn btn-p" @click="svcAction(s.name,'restart')">↺</button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+    </div>
+
+    <!-- ═══ MINECRAFT ════════════════════════════════════════════════════════ -->
+    <div class="panel" :class="{on:tab==='minecraft'}">
+
+      <div class="log-wrap">
+        <div class="log-bar">
+          <span class="log-bar-label">Bedrock Server Log — last 50 lines</span>
+          <button class="btn" @click="fetchMcLog()">↻ Refresh</button>
+        </div>
+        <div class="log-panel" x-ref="logEl" x-text="mcLog"></div>
+        <div class="cmd-row">
+          <span style="color:var(--text3);font-size:11px;margin-right:4px">&gt;</span>
+          <input class="cmd-in" type="text" placeholder="Type command and press Enter..." x-model="mcCmd" @keydown.enter="sendMcCmd()">
+          <button class="btn btn-accent" @click="sendMcCmd()">Send</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══ CONTAINERS ═══════════════════════════════════════════════════════ -->
+    <div class="panel" :class="{on:tab==='containers'}">
+
+      <div class="engines-row">
+        <template x-for="e in engines" :key="e.name">
+          <div class="engine-badge">
+            <div class="engine-dot" :class="e.available?'on':'off'"></div>
+            <span x-text="e.name"></span>
+            <span style="color:var(--text3);font-size:9px" x-show="e.version" x-text="'v'+e.version"></span>
+          </div>
+        </template>
+        <div class="engine-badge" x-show="engines.length===0" style="color:var(--text3)">No container engines detected</div>
+        <button class="btn" style="margin-left:auto" @click="fetchContainers()">↻ Refresh</button>
+      </div>
+
+      <div class="sec">
+        Running Containers
+        <span class="sec-right" x-show="containerFilter" style="color:var(--accent2)">
+          Filtered by: <span x-text="containerFilter"></span> &nbsp;
+          <span style="cursor:pointer;color:var(--danger)" @click="containerFilter=''">✕</span>
+        </span>
+      </div>
+
+      <div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap">
+        <template x-for="e in containerEngines" :key="e">
+          <button class="cat-btn" :class="{on:containerFilter===e}" @click="containerFilter=(containerFilter===e?'':e)">
+            <span x-text="e"></span>
+          </button>
+        </template>
+      </div>
+
+      <div style="overflow-x:auto">
+        <table class="ctable">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Image</th>
+              <th>Status</th>
+              <th>State</th>
+              <th>Engine</th>
+              <th>Ports</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="c in filteredContainers" :key="c.id+c.engine">
+              <tr>
+                <td style="color:var(--text);font-weight:500" x-text="c.name"></td>
+                <td style="color:var(--text3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="c.image"></td>
+                <td x-text="c.status"></td>
+                <td>
+                  <span class="pill" :class="c.state==='running'?'pill-active':(c.state==='exited'?'pill-failed':'pill-other')" x-text="c.state"></span>
+                </td>
+                <td><span class="engine-tag" x-text="c.engine"></span></td>
+                <td style="color:var(--text3);font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis" x-text="c.ports||'—'"></td>
+                <td>
+                  <div class="btns">
+                    <button class="btn btn-g" @click="containerAction(c.id,c.engine,'start')">start</button>
+                    <button class="btn btn-r" @click="containerAction(c.id,c.engine,'stop')">stop</button>
+                    <button class="btn btn-p" @click="containerAction(c.id,c.engine,'restart')">↺</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="filteredContainers.length===0">
+              <td colspan="7" style="text-align:center;color:var(--text3);padding:24px">No containers found</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- ═══ PLUGINS ══════════════════════════════════════════════════════════ -->
+    <div class="panel" :class="{on:tab==='plugins'}">
+
+      <div class="sec" style="margin-bottom:16px">Plugin Manager</div>
+
+      <div class="plugin-cats">
+        <button class="cat-btn" :class="{on:pluginCat===''}" @click="pluginCat=''">All</button>
+        <template x-for="c in pluginCategories" :key="c">
+          <button class="cat-btn" :class="{on:pluginCat===c}" @click="pluginCat=c" x-text="c"></button>
+        </template>
+      </div>
+
+      <div class="plugins-grid">
+        <template x-for="p in filteredPlugins" :key="p.id">
+          <div class="plugin-card" :class="{installed:p.installed}">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
+              <div class="plugin-name" x-text="p.name"></div>
+              <span class="pill" :class="p.installed?'pill-active':'pill-inactive'" x-text="p.installed?'installed':'available'"></span>
+            </div>
+            <div class="plugin-desc" x-text="p.desc"></div>
+            <div class="plugin-footer">
+              <span class="plugin-cat" x-text="p.category"></span>
+              <div class="btns" x-show="!installingIds.includes(p.id)">
+                <button class="btn btn-accent" @click="installPlugin(p.id)" x-show="!p.installed">Install</button>
+                <button class="btn btn-p" @click="tab='services';fetchServices()" x-show="p.installed && p.service_name">Service →</button>
+                <button class="btn" x-show="p.installed" style="color:var(--success);border-color:rgba(34,212,122,.3)">✓ Ready</button>
+              </div>
+              <div class="plugin-installing" x-show="installingIds.includes(p.id)">Installing...</div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- Toasts -->
+  <div class="toasts">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="toast" :class="t.type==='err'?'err':t.type==='warn'?'warn':''" x-text="t.msg"></div>
+    </template>
+  </div>
+
+</div><!-- /dashboard -->
+
+<script>
+const API = '';
+function getToken(){return sessionStorage.getItem('sb_tok')||''}
+function hdrs(){return{'Content-Type':'application/json','X-Auth-Token':getToken()}}
+async function api(path,opts={}){
+  const res=await fetch(API+path,{headers:hdrs(),...opts});
+  if(res.status===401){sessionStorage.removeItem('sb_tok');location.reload();throw new Error('unauth')}
+  return res;
+}
+
+function loginApp(){
+  return{
+    token:'',error:'',
+    async doLogin(){
+      const res=await fetch(API+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:this.token})});
+      if(res.ok){sessionStorage.setItem('sb_tok',this.token);location.reload()}
+      else this.error='Invalid token';
+    }
+  }
+}
+
+function dashApp(){
+  return{
+    visible:false,tab:'overview',clock:'',toasts:[],
+    metrics:{},
+    services:[],svcFilter:'',svcSort:'name',svcAsc:true,
+    containers:[],engines:[],containerFilter:'',
+    mcLog:'',mcCmd:'',mcEnabled:false,
+    plugins:[],pluginCat:'',installingIds:[],
+
+    init(){
+      this.checkMcEnabled();
+      this.fetchMetrics();
+      this.fetchServices();
+      this.fetchContainers();
+      this.fetchEngines();
+      setInterval(()=>this.fetchMetrics(),3000);
+      setInterval(()=>this.fetchServices(),10000);
+      setInterval(()=>{if(this.tab==='minecraft')this.fetchMcLog()},5000);
+      setInterval(()=>{if(this.tab==='containers')this.fetchContainers()},8000);
+      setInterval(()=>{this.clock=new Date().toTimeString().slice(0,8)},1000);
+      this.clock=new Date().toTimeString().slice(0,8);
+    },
+
+    async checkMcEnabled(){
+      try{
+        const res=await api('/api/mc/log');
+        if(res.ok){const d=await res.json();this.mcEnabled=!d.log.includes('not accessible')}
+      }catch(e){}
+    },
+
+    toast(msg,type='info'){
+      const id=Date.now()+Math.random();
+      this.toasts.push({id,msg,type});
+      setTimeout(()=>{this.toasts=this.toasts.filter(t=>t.id!==id)},3500);
+    },
+
+    fmtBytes(b){
+      if(!b||b<=0)return'0 B';
+      const u=['B','KiB','MiB','GiB','TiB'];let i=0;
+      while(b>=1024&&i<u.length-1){b/=1024;i++}
+      return b.toFixed(i?1:0)+' '+u[i];
+    },
+    fmtRate(b){
+      if(!b||b<0)return'0 B/s';
+      const u=['B/s','KiB/s','MiB/s','GiB/s'];let i=0;
+      while(b>=1024&&i<u.length-1){b/=1024;i++}
+      return b.toFixed(i?1:0)+' '+u[i];
+    },
+    barStyle(p){
+      const c=p>=90?'var(--danger)':p>=75?'var(--warn)':'var(--accent)';
+      return`width:${Math.min(p||0,100)}%;background:${c}`;
+    },
+    pillClass(a){
+      if(a==='active')return'pill-active';
+      if(a==='failed')return'pill-failed';
+      if(a==='inactive')return'pill-inactive';
+      return'pill-other';
+    },
+
+    logout(){sessionStorage.removeItem('sb_tok');location.reload()},
+
+    // ── Metrics ──
+    async fetchMetrics(){
+      try{const res=await api('/api/metrics');if(res.ok)this.metrics=await res.json()}catch(e){}
+    },
+
+    // ── Services ──
+    setSvcSort(key){
+      if(this.svcSort===key)this.svcAsc=!this.svcAsc;
+      else{this.svcSort=key;this.svcAsc=(key==='name')}
+    },
+    get filteredSvcs(){
+      let list=[...this.services];
+      if(this.svcFilter){
+        const t=this.svcFilter.toLowerCase();
+        list=list.filter(s=>s.name.toLowerCase().includes(t)||(s.desc&&s.desc.toLowerCase().includes(t)));
+      }
+      list.sort((a,b)=>{
+        let v=0;
+        if(this.svcSort==='name')v=a.name.localeCompare(b.name);
+        else if(this.svcSort==='mem')v=(a.mem_bytes||0)-(b.mem_bytes||0);
+        else if(this.svcSort==='uptime')v=(a.uptime_sec||0)-(b.uptime_sec||0);
+        else if(this.svcSort==='status'){
+          const o={active:0,failed:1,inactive:2};
+          v=(o[a.active]??3)-(o[b.active]??3);
+        }
+        return this.svcAsc?v:-v;
+      });
+      return list;
+    },
+    async fetchServices(){
+      try{const res=await api('/api/services');if(res.ok)this.services=await res.json()??[]}catch(e){}
+    },
+    async svcAction(svc,action){
+      try{
+        const res=await api('/api/services/action',{method:'POST',body:JSON.stringify({service:svc,action})});
+        const d=await res.json();
+        if(d.error)this.toast(d.error,'err');
+        else{this.toast(svc+': '+action);setTimeout(()=>this.fetchServices(),1000)}
+      }catch(e){}
+    },
+
+    // ── Minecraft ──
+    async fetchMcLog(){
+      try{
+        const res=await api('/api/mc/log');
+        if(res.ok){
+          this.mcLog=(await res.json()).log;
+          this.$nextTick(()=>{const el=this.$refs.logEl;if(el)el.scrollTop=el.scrollHeight});
+        }
+      }catch(e){}
+    },
+    async sendMcCmd(){
+      if(!this.mcCmd.trim())return;
+      try{
+        await api('/api/mc/command',{method:'POST',body:JSON.stringify({command:this.mcCmd.trim()})});
+        this.toast('Command sent');this.mcCmd='';
+        setTimeout(()=>this.fetchMcLog(),800);
+      }catch(e){}
+    },
+
+    // ── Containers ──
+    get containerEngines(){return[...new Set(this.containers.map(c=>c.engine))]},
+    get filteredContainers(){
+      if(!this.containerFilter)return this.containers;
+      return this.containers.filter(c=>c.engine===this.containerFilter);
+    },
+    async fetchEngines(){
+      try{const res=await api('/api/containers/engines');if(res.ok)this.engines=await res.json()??[]}catch(e){}
+    },
+    async fetchContainers(){
+      try{const res=await api('/api/containers');if(res.ok)this.containers=await res.json()??[]}catch(e){}
+    },
+    async containerAction(id,engine,action){
+      try{
+        await api('/api/containers/action',{method:'POST',body:JSON.stringify({id,engine,action})});
+        this.toast(id.slice(0,8)+': '+action);
+        setTimeout(()=>this.fetchContainers(),1000);
+      }catch(e){}
+    },
+
+    // ── Plugins ──
+    get pluginCategories(){return[...new Set(this.plugins.map(p=>p.category))]},
+    get filteredPlugins(){
+      if(!this.pluginCat)return this.plugins;
+      return this.plugins.filter(p=>p.category===this.pluginCat);
+    },
+    async fetchPlugins(){
+      try{const res=await api('/api/plugins');if(res.ok)this.plugins=await res.json()??[]}catch(e){}
+    },
+    async installPlugin(id){
+      if(this.installingIds.includes(id))return;
+      this.installingIds=[...this.installingIds,id];
+      this.toast('Installing '+id+'...','warn');
+      try{
+        const res=await api('/api/plugins/install',{method:'POST',body:JSON.stringify({id})});
+        const d=await res.json();
+        if(d.error)this.toast('Install failed: '+d.error,'err');
+        else{this.toast(id+' installed!');this.fetchPlugins()}
+      }catch(e){this.toast('Install error','err')}
+      this.installingIds=this.installingIds.filter(x=>x!==id);
+    }
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded',()=>{
+  const tok=getToken();
+  const loginEl=document.getElementById('login-screen');
+  const dashEl=document.getElementById('dashboard');
+
+  if(tok){
+    fetch(API+'/api/metrics',{headers:hdrs()}).then(res=>{
+      if(res.ok){
+        loginEl.style.display='none';
+        // Trigger Alpine reactive state for x-show
+        const dash=dashEl._x_dataStack?.[0];
+        if(dash){dash.visible=true;dash.init()}
+        else dashEl.style.display='flex';
+      }else{
+        sessionStorage.removeItem('sb_tok');
+      }
+    }).catch(()=>sessionStorage.removeItem('sb_tok'));
+  }
+});
+</script>
+</body>
+</html>
