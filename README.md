@@ -15,10 +15,11 @@
 
 ```bash
 # 1. Salin file ke server
-scp -r sysboard_v2/* root@hilmy:/opt/sysboard/
+cd /opt
+git clone https://github.com/hilmyah/SysBoard.git
 
 # 2. Build binary (butuh Go >= 1.21)
-cd /opt/sysboard
+cd Sysboard
 go build -ldflags="-s -w" -o sysboard main.go
 
 # 3. Install systemd service
