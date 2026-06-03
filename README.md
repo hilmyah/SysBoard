@@ -5,21 +5,21 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey?logo=linux)
 ![Zero Dependencies](https://img.shields.io/badge/Runtime_Dependencies-none-brightgreen)
 
-Self-hosted Linux system dashboard built with Go (stdlib only) and Alpine.js. Runs as a single binary with no runtime dependencies. Designed for VPS and home server use.
+Self-hosted Linux system dashboard built with Go (stdlib only) and plain vanilla JS. Runs as a single binary with no runtime dependencies and makes zero external network requests on page load. Designed for VPS and home server use.
 
 ---
 
 ## Features
 
-**Overview tab** — CPU usage, RAM, CPU temperature (hwmon + thermal_zone fallback), system uptime, network RX/TX rates with total counters, disk usage per mount.
+**Overview tab** -- CPU usage, RAM, CPU temperature (hwmon + thermal_zone fallback), system uptime, network RX/TX rates with total counters, disk usage per mount (auto-detected from `/proc/mounts`, no hardcoded paths).
 
-**Services tab** — All systemd units with live RAM usage (`MemoryCurrent`) and uptime per service. Sortable by name, RAM, uptime, or status. Full-text search. Start / stop / restart actions.
+**Processes tab** -- Top 30 processes by CPU consumption, read directly from `/proc`. Shows PID, CPU%, RAM, user, and state. Filterable by name. No external tools required.
 
-**Containers tab** — Multi-engine container discovery: Docker, Podman, containerd (via nerdctl), Kubernetes, and k3s. Engine detection with version display. Per-engine filter. Start / stop / restart actions.
+**Services tab** -- All systemd units with live RAM usage (`MemoryCurrent`) and uptime per service. Sortable by name, RAM, or status. Full-text search. Start / stop / restart actions.
 
-**Plugins tab** — Plugin catalog with one-click install via backend bash execution. Categories: gaming, containers, network, apps, orchestration. Install status detected via `which` and `systemctl is-active`.
+**Containers tab** -- Multi-engine container discovery: Docker, Podman, containerd (via nerdctl). Engine detection is automatic. Start / stop / restart actions.
 
-**Minecraft tab** — Auto-detected. Visible only when the log file path is accessible. Displays last 50 lines of Bedrock server log with live refresh. Send screen commands directly from the UI.
+**Minecraft tab** -- Auto-detected. Visible only when the log file path is accessible. Displays last 50 lines of Bedrock server log with live refresh. Send screen commands directly from the UI.
 
 ---
 
@@ -39,10 +39,10 @@ Self-hosted Linux system dashboard built with Go (stdlib only) and Alpine.js. Ru
 ├── main.go                  source
 ├── go.mod
 ├── static/
-│   └── index.html           frontend (single file, no build step)
+│   └── index.html           frontend (single file, no build step, no CDN dependencies)
 ├── systemd/
 │   └── sysboard.service     systemd unit template with EnvironmentFile
-├── .env.example             configuration template (no secrets)
+├── .env.example             configuration template
 ├── .gitignore
 └── README.md
 ```
@@ -57,7 +57,6 @@ Self-hosted Linux system dashboard built with Go (stdlib only) and Alpine.js. Ru
 git clone https://github.com/hilmyah/SysBoard.git /opt/sysboard
 cd /opt/sysboard
 
-# Create .env from template and set permissions
 cp .env.example .env
 chmod 600 .env
 ```
@@ -65,7 +64,6 @@ chmod 600 .env
 Edit `.env` and set `SYSBOARD_TOKEN` to a strong random value:
 
 ```bash
-# Generate a token
 openssl rand -hex 32
 ```
 
@@ -107,17 +105,14 @@ All configuration is read from `/opt/sysboard/.env`. systemd injects these into 
 |---|---|---|---|
 | `SYSBOARD_TOKEN` | Yes | none | Static token for all API authentication |
 | `SYSBOARD_PORT` | No | `8888` | TCP listen port |
-| `SYSBOARD_LOG_PATH` | No | `/var/log/bedrock-server.log` | Bedrock log path; set empty to disable Minecraft tab |
+| `SYSBOARD_LOG_PATH` | No | `/var/log/bedrock-server.log` | Bedrock log path; set to empty string to disable Minecraft tab |
 
 The binary will refuse to start if `SYSBOARD_TOKEN` is not set.
 
 ### Changing the token
 
 ```bash
-# Edit .env
 nano /opt/sysboard/.env
-
-# Restart service to apply
 systemctl restart sysboard
 ```
 
@@ -143,13 +138,11 @@ All endpoints except `/api/login` require the header `X-Auth-Token: <your token>
 |---|---|---|
 | `POST /api/login` | POST | `{"token":"..."}` -- returns `{"ok":true}` |
 | `GET /api/metrics` | GET | CPU, RAM, disk, temp, network I/O rates |
+| `GET /api/processes` | GET | Top 30 processes by CPU, read from `/proc` |
 | `GET /api/services` | GET | All systemd services with RAM + uptime |
-| `POST /api/services/action` | POST | `{"service":"name","action":"start|stop|restart"}` |
+| `POST /api/services/action` | POST | `{"service":"name","action":"start\|stop\|restart"}` |
 | `GET /api/containers` | GET | Containers from all detected engines |
-| `GET /api/containers/engines` | GET | Detected engines and their versions |
-| `POST /api/containers/action` | POST | `{"id":"...","engine":"docker|podman|...","action":"..."}` |
-| `GET /api/plugins` | GET | Plugin catalog with install status |
-| `POST /api/plugins/install` | POST | `{"id":"plugin_id"}` |
+| `POST /api/containers/action` | POST | `{"id":"...","engine":"docker\|podman\|containerd","action":"..."}` |
 | `GET /api/mc/log` | GET | Last 50 lines of Bedrock log |
 | `POST /api/mc/command` | POST | `{"command":"..."}` -- forwarded to screen session |
 
@@ -160,7 +153,8 @@ All endpoints except `/api/login` require the header `X-Auth-Token: <your token>
 - `.env` contains your token. Keep permissions at `600` and owner `root`.
 - `.gitignore` blocks `.env` and the compiled binary from being committed.
 - The binary is served over plain HTTP. For public exposure, put it behind a reverse proxy with TLS (nginx, Caddy).
-- Service actions and plugin installs execute as `root` (the systemd `User=`). Only expose the dashboard on trusted networks.
+- Service actions execute as `root` (the systemd `User=`). Only expose the dashboard on trusted networks.
+- The frontend makes zero external network requests. No CDN, no fonts, no analytics.
 
 ---
 

@@ -9,13 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Configuration loaded from environment at startup.
-// systemd injects these via EnvironmentFile=/opt/sysboard/.env
 var (
 	listenPort  string
 	staticToken string
@@ -52,7 +51,6 @@ type SystemMetrics struct {
 	CPUPercent float64    `json:"cpu_percent"`
 	RAMTotal   uint64     `json:"ram_total"`
 	RAMUsed    uint64     `json:"ram_used"`
-	RAMFree    uint64     `json:"ram_free"`
 	RAMPercent float64    `json:"ram_percent"`
 	Disks      []DiskInfo `json:"disks"`
 	Uptime     string     `json:"uptime"`
@@ -134,6 +132,57 @@ func getMemInfo() (total, used, free uint64) {
 	return
 }
 
+// getDiskMounts reads /proc/mounts and returns real block-device mount points,
+// excluding tmpfs, devtmpfs, sysfs, proc, cgroup, and overlay.
+func getDiskMounts() []string {
+	f, err := os.Open("/proc/mounts")
+	if err != nil {
+		return []string{"/"}
+	}
+	defer f.Close()
+
+	skip := map[string]bool{
+		"tmpfs": true, "devtmpfs": true, "sysfs": true, "proc": true,
+		"cgroup": true, "cgroup2": true, "pstore": true, "securityfs": true,
+		"debugfs": true, "configfs": true, "fusectl": true, "hugetlbfs": true,
+		"mqueue": true, "bpf": true, "tracefs": true, "efivarfs": true,
+		"autofs": true, "overlay": true, "squashfs": true,
+	}
+	skipPrefix := []string{"/sys", "/proc", "/dev", "/run"}
+
+	seen := map[string]bool{}
+	var mounts []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 {
+			continue
+		}
+		fstype := fields[2]
+		mount := fields[1]
+		if skip[fstype] {
+			continue
+		}
+		ignored := false
+		for _, p := range skipPrefix {
+			if strings.HasPrefix(mount, p) {
+				ignored = true
+				break
+			}
+		}
+		if ignored || seen[mount] {
+			continue
+		}
+		seen[mount] = true
+		mounts = append(mounts, mount)
+	}
+	if len(mounts) == 0 {
+		return []string{"/"}
+	}
+	sort.Strings(mounts)
+	return mounts
+}
+
 func getDiskInfo(mount string) DiskInfo {
 	out, err := exec.Command("df", "-B1", mount).Output()
 	if err != nil {
@@ -207,9 +256,7 @@ func getNetRate() (rxBytes, txBytes uint64, rxRate, txRate float64) {
 }
 
 func getCPUTemp() float64 {
-	// Try hwmon first (most systems)
-	pattern := "/sys/class/hwmon/hwmon*/temp*_input"
-	matches, err := filepath.Glob(pattern)
+	matches, err := filepath.Glob("/sys/class/hwmon/hwmon*/temp*_input")
 	if err == nil {
 		for _, m := range matches {
 			data, err := os.ReadFile(m)
@@ -221,7 +268,6 @@ func getCPUTemp() float64 {
 			}
 		}
 	}
-	// Fallback: thermal_zone
 	for i := 0; i < 5; i++ {
 		data, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i))
 		if err == nil {
@@ -241,7 +287,12 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if total > 0 {
 		ramPct = float64(used) / float64(total) * 100
 	}
-	disks := []DiskInfo{getDiskInfo("/"), getDiskInfo("/home"), getDiskInfo("/var")}
+
+	mounts := getDiskMounts()
+	disks := make([]DiskInfo, 0, len(mounts))
+	for _, m := range mounts {
+		disks = append(disks, getDiskInfo(m))
+	}
 
 	uptimeOut, _ := os.ReadFile("/proc/uptime")
 	uptime := "unknown"
@@ -264,14 +315,179 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	cpuTemp := getCPUTemp()
 
 	json.NewEncoder(w).Encode(SystemMetrics{
-		CPUPercent: cpu, RAMTotal: total, RAMUsed: used, RAMFree: free, RAMPercent: ramPct,
+		CPUPercent: cpu, RAMTotal: total, RAMUsed: used, RAMPercent: ramPct,
 		Disks: disks, Uptime: uptime, LoadAvg: loadAvg, Timestamp: time.Now().Format("15:04:05"),
 		NetRxBytes: rxBytes, NetTxBytes: txBytes, NetRxRate: rxRate, NetTxRate: txRate,
 		CPUTemp: cpuTemp,
 	})
 }
 
-// ─── Systemd Services (with RAM + Uptime) ─────────────────────────────────────
+// ─── Top Processes ────────────────────────────────────────────────────────────
+
+type ProcessInfo struct {
+	PID     int     `json:"pid"`
+	Name    string  `json:"name"`
+	CPUPct  float64 `json:"cpu_pct"`
+	MemBytes uint64 `json:"mem_bytes"`
+	State   string  `json:"state"`
+	User    string  `json:"user"`
+}
+
+// readProcStat reads /proc/<pid>/stat and returns utime+stime in ticks, plus state and comm.
+func readProcStat(pid int) (name, state string, ticks uint64) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return
+	}
+	s := string(data)
+	// comm is between first '(' and last ')' to handle names with spaces/parens
+	start := strings.Index(s, "(")
+	end := strings.LastIndex(s, ")")
+	if start < 0 || end < 0 || end <= start {
+		return
+	}
+	name = s[start+1 : end]
+	rest := strings.Fields(s[end+2:])
+	if len(rest) < 12 {
+		return
+	}
+	state = rest[0]
+	utime, _ := strconv.ParseUint(rest[11], 10, 64)
+	stime, _ := strconv.ParseUint(rest[12], 10, 64)
+	ticks = utime + stime
+	return
+}
+
+func readProcMem(pid int) uint64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				return v * 1024
+			}
+		}
+	}
+	return 0
+}
+
+func readProcUser(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return ""
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "Uid:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				uid := fields[1]
+				// Resolve common UIDs without calling id/getent
+				switch uid {
+				case "0":
+					return "root"
+				default:
+					// Try /etc/passwd fast scan
+					return resolveUID(uid)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func resolveUID(uid string) string {
+	f, err := os.Open("/etc/passwd")
+	if err != nil {
+		return uid
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), ":", 4)
+		if len(parts) >= 3 && parts[2] == uid {
+			return parts[0]
+		}
+	}
+	return uid
+}
+
+// clkTck is the number of clock ticks per second (typically 100 on Linux).
+const clkTck = 100
+
+var (
+	prevProcTicks = map[int]uint64{}
+	prevProcTime  time.Time
+)
+
+func handleProcesses(w http.ResponseWriter, r *http.Request) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		json.NewEncoder(w).Encode([]ProcessInfo{})
+		return
+	}
+
+	now := time.Now()
+	elapsed := now.Sub(prevProcTime).Seconds()
+	if prevProcTime.IsZero() {
+		elapsed = 1
+	}
+	prevProcTime = now
+
+	curTicks := map[int]uint64{}
+	var procs []ProcessInfo
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		name, state, ticks := readProcStat(pid)
+		if name == "" {
+			continue
+		}
+		curTicks[pid] = ticks
+		cpuPct := 0.0
+		if prev, ok := prevProcTicks[pid]; ok && elapsed > 0 {
+			delta := float64(ticks-prev) / clkTck
+			cpuPct = (delta / elapsed) * 100
+		}
+		mem := readProcMem(pid)
+		user := readProcUser(pid)
+		procs = append(procs, ProcessInfo{
+			PID: pid, Name: name, CPUPct: cpuPct,
+			MemBytes: mem, State: state, User: user,
+		})
+	}
+
+	prevProcTicks = curTicks
+
+	// Sort by CPU desc, then by MEM desc as tiebreaker
+	sort.Slice(procs, func(i, j int) bool {
+		if procs[i].CPUPct != procs[j].CPUPct {
+			return procs[i].CPUPct > procs[j].CPUPct
+		}
+		return procs[i].MemBytes > procs[j].MemBytes
+	})
+
+	top := 30
+	if len(procs) < top {
+		top = len(procs)
+	}
+	json.NewEncoder(w).Encode(procs[:top])
+}
+
+// ─── Systemd Services ─────────────────────────────────────────────────────────
 
 type ServiceStatus struct {
 	Name      string `json:"name"`
@@ -281,19 +497,17 @@ type ServiceStatus struct {
 	MemBytes  uint64 `json:"mem_bytes"`
 	UptimeSec int64  `json:"uptime_sec"`
 	UptimeStr string `json:"uptime_str"`
-	LoadState string `json:"load_state"`
 }
 
 func getServiceMemAndUptime(name string) (memBytes uint64, uptimeSec int64) {
-	out, err := exec.Command("systemctl", "show", name+".service", "--property=MemoryCurrent,ActiveEnterTimestamp").Output()
+	out, err := exec.Command("systemctl", "show", name+".service",
+		"--property=MemoryCurrent,ActiveEnterTimestamp").Output()
 	if err != nil {
 		return
 	}
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "MemoryCurrent=") {
-			val := strings.TrimPrefix(line, "MemoryCurrent=")
-			val = strings.TrimSpace(val)
+			val := strings.TrimSpace(strings.TrimPrefix(line, "MemoryCurrent="))
 			if val != "[not set]" && val != "" {
 				v, err := strconv.ParseUint(val, 10, 64)
 				if err == nil {
@@ -302,10 +516,8 @@ func getServiceMemAndUptime(name string) (memBytes uint64, uptimeSec int64) {
 			}
 		}
 		if strings.HasPrefix(line, "ActiveEnterTimestamp=") {
-			ts := strings.TrimPrefix(line, "ActiveEnterTimestamp=")
-			ts = strings.TrimSpace(ts)
+			ts := strings.TrimSpace(strings.TrimPrefix(line, "ActiveEnterTimestamp="))
 			if ts != "" && ts != "n/a" {
-				// Parse systemd timestamp: "Tue 2026-06-02 10:52:30 WIB"
 				t, err := time.Parse("Mon 2006-01-02 15:04:05 MST", ts)
 				if err == nil {
 					uptimeSec = int64(time.Since(t).Seconds())
@@ -316,7 +528,7 @@ func getServiceMemAndUptime(name string) (memBytes uint64, uptimeSec int64) {
 	return
 }
 
-func uptimeStr(sec int64) string {
+func uptimeFmt(sec int64) string {
 	if sec <= 0 {
 		return ""
 	}
@@ -324,35 +536,37 @@ func uptimeStr(sec int64) string {
 		return fmt.Sprintf("%ds", sec)
 	}
 	if sec < 3600 {
-		return fmt.Sprintf("%dm %ds", sec/60, sec%60)
+		return fmt.Sprintf("%dm%ds", sec/60, sec%60)
 	}
 	if sec < 86400 {
-		return fmt.Sprintf("%dh %dm", sec/3600, (sec%3600)/60)
+		return fmt.Sprintf("%dh%dm", sec/3600, (sec%3600)/60)
 	}
-	return fmt.Sprintf("%dd %dh", sec/86400, (sec%86400)/3600)
+	return fmt.Sprintf("%dd%dh", sec/86400, (sec%86400)/3600)
 }
 
 func handleServices(w http.ResponseWriter, r *http.Request) {
-	out, err := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--plain", "--no-legend").Output()
+	out, err := exec.Command("systemctl", "list-units", "--type=service",
+		"--all", "--no-pager", "--plain", "--no-legend").Output()
 	var statuses []ServiceStatus
 	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		for _, line := range lines {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) >= 4 {
-				name := strings.TrimSuffix(fields[0], ".service")
-				active := fields[2]
-				sub := fields[3]
-				desc := strings.Join(fields[4:], " ")
-				mem, upSec := uint64(0), int64(0)
-				if active == "active" {
-					mem, upSec = getServiceMemAndUptime(name)
-				}
-				statuses = append(statuses, ServiceStatus{
-					Name: name, Active: active, Sub: sub, Desc: desc,
-					MemBytes: mem, UptimeSec: upSec, UptimeStr: uptimeStr(upSec),
-				})
+			if len(fields) < 4 {
+				continue
 			}
+			name := strings.TrimSuffix(fields[0], ".service")
+			active := fields[2]
+			sub := fields[3]
+			desc := strings.Join(fields[4:], " ")
+			var mem uint64
+			var upSec int64
+			if active == "active" {
+				mem, upSec = getServiceMemAndUptime(name)
+			}
+			statuses = append(statuses, ServiceStatus{
+				Name: name, Active: active, Sub: sub, Desc: desc,
+				MemBytes: mem, UptimeSec: upSec, UptimeStr: uptimeFmt(upSec),
+			})
 		}
 	}
 	json.NewEncoder(w).Encode(statuses)
@@ -382,7 +596,7 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// ─── Container Engines ────────────────────────────────────────────────────────
+// ─── Containers ───────────────────────────────────────────────────────────────
 
 type ContainerInfo struct {
 	ID     string `json:"id"`
@@ -394,24 +608,14 @@ type ContainerInfo struct {
 	Engine string `json:"engine"`
 }
 
-type EngineInfo struct {
-	Name      string `json:"name"`
-	Available bool   `json:"available"`
-	Version   string `json:"version"`
-}
-
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
 }
 
-func socketExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 func getDockerContainers(engine, cmd string) []ContainerInfo {
-	out, err := exec.Command(cmd, "ps", "-a", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.State}}|{{.Ports}}").Output()
+	out, err := exec.Command(cmd, "ps", "-a", "--format",
+		"{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.State}}|{{.Ports}}").Output()
 	if err != nil {
 		return nil
 	}
@@ -429,136 +633,23 @@ func getDockerContainers(engine, cmd string) []ContainerInfo {
 	return containers
 }
 
-func getNerdctlContainers() []ContainerInfo {
-	out, err := exec.Command("nerdctl", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Status}}\t{{.Ports}}").Output()
-	if err != nil {
-		return nil
-	}
-	var containers []ContainerInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 4 && parts[0] != "" {
-			state := "running"
-			if strings.Contains(strings.ToLower(parts[3]), "exited") {
-				state = "exited"
-			}
-			ports := ""
-			if len(parts) >= 6 {
-				ports = parts[5]
-			}
-			containers = append(containers, ContainerInfo{
-				ID: parts[0], Name: parts[1], Image: parts[2],
-				Status: parts[3], State: state, Ports: ports,
-				Engine: "containerd/nerdctl",
-			})
-		}
-	}
-	return containers
-}
-
-func getKubernetesPods() []ContainerInfo {
-	var cmd string
-	if commandExists("kubectl") {
-		cmd = "kubectl"
-	} else if commandExists("k3s") {
-		cmd = "k3s"
-	} else {
-		return nil
-	}
-
-	var args []string
-	if cmd == "k3s" {
-		args = []string{"kubectl", "get", "pods", "--all-namespaces", "--no-headers", "-o",
-			"custom-columns=NAME:.metadata.name,NS:.metadata.namespace,STATUS:.status.phase,IMAGE:.spec.containers[0].image"}
-	} else {
-		args = []string{"get", "pods", "--all-namespaces", "--no-headers", "-o",
-			"custom-columns=NAME:.metadata.name,NS:.metadata.namespace,STATUS:.status.phase,IMAGE:.spec.containers[0].image"}
-	}
-
-	out, err := exec.Command(cmd, args...).Output()
-	if err != nil {
-		return nil
-	}
-	var containers []ContainerInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 {
-			state := strings.ToLower(fields[2])
-			image := ""
-			if len(fields) >= 4 {
-				image = fields[3]
-			}
-			containers = append(containers, ContainerInfo{
-				ID: fields[0], Name: fields[0] + " (" + fields[1] + ")",
-				Image: image, Status: fields[2], State: state, Ports: "",
-				Engine: "kubernetes",
-			})
-		}
-	}
-	return containers
-}
-
 func handleContainerList(w http.ResponseWriter, r *http.Request) {
 	var all []ContainerInfo
-
-	if commandExists("docker") && socketExists("/var/run/docker.sock") {
-		all = append(all, getDockerContainers("docker", "docker")...)
+	if commandExists("docker") {
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			all = append(all, getDockerContainers("docker", "docker")...)
+		}
 	}
 	if commandExists("podman") {
 		all = append(all, getDockerContainers("podman", "podman")...)
 	}
 	if commandExists("nerdctl") {
-		all = append(all, getNerdctlContainers()...)
+		all = append(all, getDockerContainers("containerd", "nerdctl")...)
 	}
-	if commandExists("kubectl") || commandExists("k3s") {
-		all = append(all, getKubernetesPods()...)
-	}
-
 	if all == nil {
 		all = []ContainerInfo{}
 	}
 	json.NewEncoder(w).Encode(all)
-}
-
-func handleEngineInfo(w http.ResponseWriter, r *http.Request) {
-	engines := []EngineInfo{}
-
-	if commandExists("docker") {
-		ver := ""
-		out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").Output()
-		if err == nil {
-			ver = strings.TrimSpace(string(out))
-		}
-		engines = append(engines, EngineInfo{Name: "docker", Available: socketExists("/var/run/docker.sock"), Version: ver})
-	}
-	if commandExists("podman") {
-		ver := ""
-		out, err := exec.Command("podman", "version", "--format", "{{.Version}}").Output()
-		if err == nil {
-			ver = strings.TrimSpace(string(out))
-		}
-		engines = append(engines, EngineInfo{Name: "podman", Available: true, Version: ver})
-	}
-	if commandExists("nerdctl") {
-		engines = append(engines, EngineInfo{Name: "containerd/nerdctl", Available: true})
-	}
-	if commandExists("kubectl") {
-		ver := ""
-		out, err := exec.Command("kubectl", "version", "--client", "--short").Output()
-		if err == nil {
-			ver = strings.TrimSpace(string(out))
-		}
-		engines = append(engines, EngineInfo{Name: "kubernetes", Available: true, Version: ver})
-	} else if commandExists("k3s") {
-		ver := ""
-		out, err := exec.Command("k3s", "--version").Output()
-		if err == nil {
-			ver = strings.Fields(string(out))[0]
-		}
-		engines = append(engines, EngineInfo{Name: "k3s", Available: true, Version: ver})
-	}
-
-	json.NewEncoder(w).Encode(engines)
 }
 
 func handleContainerAction(w http.ResponseWriter, r *http.Request) {
@@ -577,17 +668,12 @@ func handleContainerAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
 		return
 	}
-
-	var cmd string
-	switch engine {
-	case "podman":
+	cmd := "docker"
+	if engine == "podman" {
 		cmd = "podman"
-	case "containerd/nerdctl":
+	} else if engine == "containerd" {
 		cmd = "nerdctl"
-	default:
-		cmd = "docker"
 	}
-
 	out, err := exec.Command(cmd, action, id).CombinedOutput()
 	result := map[string]string{"output": string(out)}
 	if err != nil {
@@ -630,89 +716,6 @@ func handleMcCommand(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// ─── Plugins ──────────────────────────────────────────────────────────────────
-
-type PluginDef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Desc        string `json:"desc"`
-	Installed   bool   `json:"installed"`
-	ServiceName string `json:"service_name"`
-	CheckCmd    string `json:"check_cmd"`
-	InstallCmd  string `json:"install_cmd"`
-	Category    string `json:"category"`
-}
-
-var pluginCatalog = []PluginDef{
-	{ID: "minecraft", Name: "Minecraft Bedrock", Desc: "Bedrock server console + log viewer", CheckCmd: "bedrock_server", ServiceName: "bedrock", Category: "gaming",
-		InstallCmd: "curl -fsSL https://raw.githubusercontent.com/hilmyah/bedrock-server/main/install.sh | bash"},
-	{ID: "docker", Name: "Docker", Desc: "Container engine (Docker CE)", CheckCmd: "docker", ServiceName: "docker", Category: "containers",
-		InstallCmd: "curl -fsSL https://get.docker.com | sh"},
-	{ID: "podman", Name: "Podman", Desc: "Rootless container engine", CheckCmd: "podman", ServiceName: "podman", Category: "containers",
-		InstallCmd: "apt-get install -y podman"},
-	{ID: "k3s", Name: "k3s", Desc: "Lightweight Kubernetes", CheckCmd: "k3s", ServiceName: "k3s", Category: "orchestration",
-		InstallCmd: "curl -sfL https://get.k3s.io | sh -"},
-	{ID: "nextcloud", Name: "Nextcloud", Desc: "Self-hosted cloud storage", CheckCmd: "nextcloud", ServiceName: "nextcloud", Category: "apps",
-		InstallCmd: "snap install nextcloud"},
-	{ID: "portainer", Name: "Portainer", Desc: "Docker/k8s web management UI", CheckCmd: "", ServiceName: "", Category: "containers",
-		InstallCmd: "docker volume create portainer_data && docker run -d -p 9000:9000 --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce"},
-	{ID: "tailscale", Name: "Tailscale", Desc: "Zero-config VPN mesh network", CheckCmd: "tailscale", ServiceName: "tailscaled", Category: "network",
-		InstallCmd: "curl -fsSL https://tailscale.com/install.sh | sh"},
-	{ID: "cloudflared", Name: "Cloudflared", Desc: "Cloudflare Tunnel agent", CheckCmd: "cloudflared", ServiceName: "cloudflared", Category: "network",
-		InstallCmd: "wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && dpkg -i cloudflared-linux-amd64.deb"},
-	{ID: "playit", Name: "Playit.gg", Desc: "Free game server tunneling", CheckCmd: "playit", ServiceName: "playit", Category: "network",
-		InstallCmd: "curl -SsL https://playit-cloud.github.io/ppa/key.gpg | gpg --dearmor | tee /etc/apt/trusted.gpg.d/playit.gpg >/dev/null && echo 'deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data ./' | tee /etc/apt/sources.list.d/playit-cloud.list && apt update && apt install -y playit"},
-}
-
-func handlePlugins(w http.ResponseWriter, r *http.Request) {
-	result := make([]PluginDef, len(pluginCatalog))
-	for i, p := range pluginCatalog {
-		p.Installed = false
-		if p.CheckCmd != "" {
-			p.Installed = commandExists(p.CheckCmd)
-		} else if p.ServiceName != "" {
-			out, err := exec.Command("systemctl", "is-active", p.ServiceName).Output()
-			p.Installed = err == nil && strings.TrimSpace(string(out)) == "active"
-		}
-		result[i] = p
-	}
-	json.NewEncoder(w).Encode(result)
-}
-
-func handlePluginInstall(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-	var req map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
-		return
-	}
-	id := req["id"]
-	if id == "" {
-		http.Error(w, `{"error":"missing id"}`, http.StatusBadRequest)
-		return
-	}
-	var plugin *PluginDef
-	for i := range pluginCatalog {
-		if pluginCatalog[i].ID == id {
-			plugin = &pluginCatalog[i]
-			break
-		}
-	}
-	if plugin == nil {
-		http.Error(w, `{"error":"unknown plugin"}`, http.StatusNotFound)
-		return
-	}
-	out, err := exec.Command("bash", "-c", plugin.InstallCmd).CombinedOutput()
-	result := map[string]string{"output": string(out), "id": id}
-	if err != nil {
-		result["error"] = err.Error()
-	}
-	json.NewEncoder(w).Encode(result)
-}
-
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -738,8 +741,6 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	// Load required configuration from environment.
-	// systemd injects these from EnvironmentFile=/opt/sysboard/.env
 	staticToken = os.Getenv("SYSBOARD_TOKEN")
 	if staticToken == "" {
 		log.Fatal("SYSBOARD_TOKEN is not set; set it in /opt/sysboard/.env and reload the service")
@@ -757,7 +758,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -768,15 +768,13 @@ func main() {
 
 	mux.HandleFunc("/api/login", handleLogin)
 	mux.HandleFunc("/api/metrics", authMiddleware(handleMetrics))
+	mux.HandleFunc("/api/processes", authMiddleware(handleProcesses))
 	mux.HandleFunc("/api/services", authMiddleware(handleServices))
 	mux.HandleFunc("/api/services/action", authMiddleware(handleServiceAction))
+	mux.HandleFunc("/api/containers", authMiddleware(handleContainerList))
+	mux.HandleFunc("/api/containers/action", authMiddleware(handleContainerAction))
 	mux.HandleFunc("/api/mc/log", authMiddleware(handleMcLog))
 	mux.HandleFunc("/api/mc/command", authMiddleware(handleMcCommand))
-	mux.HandleFunc("/api/containers", authMiddleware(handleContainerList))
-	mux.HandleFunc("/api/containers/engines", authMiddleware(handleEngineInfo))
-	mux.HandleFunc("/api/containers/action", authMiddleware(handleContainerAction))
-	mux.HandleFunc("/api/plugins", authMiddleware(handlePlugins))
-	mux.HandleFunc("/api/plugins/install", authMiddleware(handlePluginInstall))
 
 	log.Printf("SysBoard listening on %s", listenPort)
 	if err := http.ListenAndServe(listenPort, mux); err != nil {
