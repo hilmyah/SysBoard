@@ -282,7 +282,7 @@ func getCPUTemp() float64 {
 
 func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	cpu := getCPUPercent()
-	total, used, free := getMemInfo()
+	total, used, _ := getMemInfo()
 	ramPct := 0.0
 	if total > 0 {
 		ramPct = float64(used) / float64(total) * 100
